@@ -41,7 +41,7 @@ jobs:
           cache: "npm"
 
       - name: Instalar dependencias
-        run: npm ci
+        run:  npm install
 
       - name: Build — generar HTML desde Notion
         env:
