@@ -1,28 +1,10 @@
-# .github/workflows/deploy.yml
-#
-# BIMARG Blog — Deploy automático a DreamHost
-#
-# Se ejecuta:
-#   - Cada vez que pushés cambios a la rama main
-#   - Cada hora (para publicar posts nuevos en Notion)
-#
-# Secrets requeridos en GitHub → Settings → Secrets:
-#   NOTION_API_KEY      — tu Notion integration token
-#   NOTION_DATABASE_ID  — ID de la DB "Blog BIMARG"
-#   FTP_HOST            — ej: ftp.bimarg.com
-#   FTP_USERNAME        — usuario FTP de DreamHost
-#   FTP_PASSWORD        — contraseña FTP de DreamHost
-#   FTP_SERVER_DIR      — carpeta en DreamHost, ej: /blog
-
 name: Deploy Blog BIMARG
 
 on:
   push:
     branches: [main]
   schedule:
-    # Cada hora en punto (UTC) — ajustá si querés otra frecuencia
     - cron: "0 * * * *"
-  # Permite triggerear manualmente desde GitHub → Actions
   workflow_dispatch:
 
 jobs:
@@ -38,12 +20,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
 
       - name: Instalar dependencias
-        run:  npm install
+        run: npm install
 
-      - name: Build — generar HTML desde Notion
+      - name: Build desde Notion
         env:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
@@ -57,5 +38,4 @@ jobs:
           password: ${{ secrets.FTP_PASSWORD }}
           local-dir: ./dist/blog/
           server-dir: ${{ secrets.FTP_SERVER_DIR }}
-          # Solo sube archivos que cambiaron (más rápido)
           dangerous-clean-slate: false
