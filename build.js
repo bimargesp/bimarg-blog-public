@@ -181,10 +181,8 @@ async function fetchAllBlocks(blockId) {
 
   // Leer subbloques recursivamente
   for (const block of blocks) {
-    if (block.has_children) {
-      const type = block.type;
-      // Ignorar subbloques de bases de datos y páginas hijas
-      if (type === "child_database" || type === "child_page") continue;
+  const type = block.type;
+    if (block.has_children && type !== "child_database" && type !== "child_page") {
       block._children = await fetchAllBlocks(block.id);
     }
   }
