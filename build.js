@@ -166,14 +166,12 @@ function blockToHtml(block) {
   }
 }
 
-async function blocksToHtml(pageId) {
+async function fetchAllBlocks(blockId) {
   const blocks = [];
   let cursor;
-
-  // Obtener todos los bloques con paginación
   do {
     const res = await notion.blocks.children.list({
-      block_id: pageId,
+      block_id: blockId,
       page_size: 100,
       ...(cursor ? { start_cursor: cursor } : {}),
     });
@@ -181,6 +179,19 @@ async function blocksToHtml(pageId) {
     cursor = res.has_more ? res.next_cursor : null;
   } while (cursor);
 
+  // Leer subbloques recursivamente
+  for (const block of blocks) {
+    if (block.has_children) {
+      const type = block.type;
+      // Ignorar subbloques de bases de datos y páginas hijas
+      if (type === "child_database" || type === "child_page") continue;
+      block._children = await fetchAllBlocks(block.id);
+    }
+  }
+  return blocks;
+}
+
+function renderBlocks(blocks) {
   let html = "";
   let inBulletList = false;
   let inNumberedList = false;
@@ -190,22 +201,27 @@ async function blocksToHtml(pageId) {
     const isBullet = type === "bulleted_list_item" || type === "to_do";
     const isNumbered = type === "numbered_list_item";
 
-    // Cerrar listas si el tipo cambia
     if (!isBullet && inBulletList) { html += "</ul>"; inBulletList = false; }
     if (!isNumbered && inNumberedList) { html += "</ol>"; inNumberedList = false; }
-
-    // Abrir listas
     if (isBullet && !inBulletList) { html += "<ul>"; inBulletList = true; }
     if (isNumbered && !inNumberedList) { html += "<ol>"; inNumberedList = true; }
 
     html += blockToHtml(block);
+
+    // Renderizar subbloques si existen
+    if (block._children && block._children.length > 0) {
+      html += renderBlocks(block._children);
+    }
   }
 
-  // Cerrar listas abiertas
   if (inBulletList) html += "</ul>";
   if (inNumberedList) html += "</ol>";
-
   return html;
+}
+
+async function blocksToHtml(pageId) {
+  const blocks = await fetchAllBlocks(pageId);
+  return renderBlocks(blocks);
 }
 
 // ─── Leer posts de Notion ─────────────────────────────────────────────────
@@ -358,7 +374,35 @@ function indexTemplate(posts) {
   });
 }
 
-function postTemplate(post) {
+function relatedPostsHtml(currentPost, allPosts) {
+  const others = allPosts.filter(p => p.slug !== currentPost.slug);
+  const related = others.slice(0, 2);
+  if (!related.length) return "";
+
+  const cards = related.map(p => `
+    <a href="/blog/${p.slug}/" class="related-card">
+      <div class="related-card-img">
+        ${p.imagenLocal
+          ? `<img src="${p.imagenLocal}" alt="${p.titulo}" loading="lazy">`
+          : `<div class="related-card-placeholder"><span>${p.categoria}</span></div>`}
+      </div>
+      <div class="related-card-body">
+        <span class="related-card-cat">${p.categoria}</span>
+        <h3 class="related-card-title">${p.titulo}</h3>
+        <span class="related-card-time">${p.tiempoLectura} lectura</span>
+      </div>
+    </a>`).join("");
+
+  return `
+    <section class="related-posts reveal">
+      <h2 class="related-title">Seguí leyendo</h2>
+      <div class="related-grid">
+        ${cards}
+      </div>
+    </section>`;
+}
+
+function postTemplate(post, allPosts) {
   const content = `
   <main class="post-main">
     <article class="post-article">
@@ -389,6 +433,7 @@ function postTemplate(post) {
         <a href="/blog" class="post-back-bottom">← Todos los artículos</a>
       </footer>
     </article>
+    ${relatedPostsHtml(post, allPosts)}
   </main>`;
 
   return htmlShell({
@@ -422,7 +467,7 @@ async function build() {
 
   for (const post of posts) {
     const postDir = path.join(BLOG_DIST, post.slug);
-    writeFile(path.join(postDir, "index.html"), postTemplate(post));
+    writeFile(path.join(postDir, "index.html"), postTemplate(post, posts));
   }
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
