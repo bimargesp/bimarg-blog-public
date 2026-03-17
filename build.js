@@ -387,6 +387,7 @@ const heroStyles = `
 
 const heroScript = `
 <script>
+document.addEventListener('DOMContentLoaded', function() {
 (function() {
   var TOTAL  = 121;
   var RATIO  = 1920 / 1080;
@@ -474,6 +475,7 @@ const heroScript = `
   resize();
   preload();
 })();
+}); // DOMContentLoaded
 </script>`;
 
 // ─── indexTemplate con hero integrado ─────────────────────────────────────
