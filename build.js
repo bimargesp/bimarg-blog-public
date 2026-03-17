@@ -1,6 +1,7 @@
 /**
- * BIMARG Blog — Build Script v2
+ * BIMARG Blog — Build Script v3
  * Lee posts de Notion y genera HTML estático en /dist
+ * Incluye hero scroll-driven (frame animation) en el index del blog
  *
  * Variables de entorno requeridas:
  *   NOTION_API_KEY     — tu Notion integration token
@@ -159,7 +160,7 @@ function blockToHtml(block) {
     case "child_database":
     case "child_page":
     case "unsupported":
-      return ""; // Ignorar estos bloques (incl. bases de datos inline)
+      return "";
 
     default:
       return "";
@@ -179,9 +180,8 @@ async function fetchAllBlocks(blockId) {
     cursor = res.has_more ? res.next_cursor : null;
   } while (cursor);
 
-  // Leer subbloques recursivamente
   for (const block of blocks) {
-  const type = block.type;
+    const type = block.type;
     if (block.has_children && type !== "child_database" && type !== "child_page") {
       block._children = await fetchAllBlocks(block.id);
     }
@@ -206,7 +206,6 @@ function renderBlocks(blocks) {
 
     html += blockToHtml(block);
 
-    // Renderizar subbloques si existen
     if (block._children && block._children.length > 0) {
       html += renderBlocks(block._children);
     }
@@ -261,7 +260,6 @@ async function fetchPosts() {
       imagenLocal = await downloadImage(imagenUrl, slug + "-cover");
     }
 
-    // Convertir bloques a HTML directamente (sin notion-to-md)
     const bodyHtml = await blocksToHtml(page.id);
 
     posts.push({ id: page.id, titulo, slug, descripcion, categoria, autor, tiempoLectura, fecha, fechaRaw, imagenLocal, bodyHtml });
@@ -319,6 +317,167 @@ function htmlShell({ title, description, canonical, content, extraHead = "" }) {
 </html>`;
 }
 
+// ─── HERO SCROLL — CSS inerido en el index del blog ───────────────────────
+
+const heroStyles = `
+<style>
+/* ── Hero scroll section ── */
+#hero-scroll { position: relative; height: 500vh; }
+#hero-sticky {
+  position: sticky; top: 0; height: 100vh; width: 100%;
+  overflow: hidden; display: flex; align-items: center;
+  justify-content: center; background: #080808;
+}
+#hero-canvas { display: block; }
+
+/* Loader */
+#hero-loader {
+  position: absolute; inset: 0; background: #080808;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  z-index: 10; transition: opacity 0.8s ease;
+}
+#hero-loader.hidden { opacity: 0; pointer-events: none; }
+.hl-logo { font-family: 'Syne', sans-serif; font-size: 11px; letter-spacing: 0.4em; color: #00BFFF; margin-bottom: 40px; text-transform: uppercase; }
+.hl-track { width: 160px; height: 1px; background: rgba(255,255,255,0.08); overflow: hidden; }
+.hl-fill  { height: 100%; width: 0%; background: #00BFFF; box-shadow: 0 0 8px #00BFFF; transition: width 0.08s linear; }
+.hl-num   { margin-top: 14px; font-size: 10px; letter-spacing: 0.25em; color: rgba(255,255,255,0.25); }
+
+/* Texto overlay */
+#hero-text {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; justify-content: center;
+  padding: 0 6vw; pointer-events: none;
+}
+.ht-label {
+  font-size: clamp(9px, 0.85vw, 11px); letter-spacing: 0.35em; text-transform: uppercase;
+  color: #00BFFF; opacity: 0; transform: translateY(8px);
+  transition: opacity 0.6s ease, transform 0.6s ease; margin-bottom: 16px;
+}
+.ht-title {
+  font-family: 'Syne', sans-serif; font-size: clamp(28px, 4.2vw, 68px);
+  font-weight: 700; line-height: 1.06; letter-spacing: -0.025em;
+  color: #fff; max-width: 11ch; opacity: 0; transform: translateY(14px);
+  transition: opacity 0.7s ease 0.1s, transform 0.7s ease 0.1s; margin-bottom: 18px;
+}
+.ht-title em { font-style: normal; color: #00BFFF; -webkit-text-fill-color: #00BFFF; background: none; }
+.ht-sub {
+  font-size: clamp(12px, 1.1vw, 16px); color: rgba(255,255,255,0.45);
+  line-height: 1.65; max-width: 34ch; font-weight: 300;
+  opacity: 0; transform: translateY(10px);
+  transition: opacity 0.7s ease 0.2s, transform 0.7s ease 0.2s;
+}
+#hero-text.visible .ht-label,
+#hero-text.visible .ht-title,
+#hero-text.visible .ht-sub { opacity: 1; transform: translateY(0); }
+
+/* Scroll hint */
+#hero-hint {
+  position: absolute; bottom: 28px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  pointer-events: none; transition: opacity 0.5s ease;
+}
+#hero-hint.gone { opacity: 0; }
+.hh-txt { font-size: 9px; letter-spacing: 0.3em; text-transform: uppercase; color: rgba(255,255,255,0.2); }
+.hh-line { width: 1px; height: 26px; background: linear-gradient(to bottom, rgba(255,255,255,0.2), transparent); animation: hintPulse 1.8s ease-in-out infinite; }
+@keyframes hintPulse { 0%,100%{opacity:.2} 50%{opacity:.7} }
+</style>`;
+
+// ─── HERO SCROLL — JS inline ──────────────────────────────────────────────
+
+const heroScript = `
+<script>
+(function() {
+  var TOTAL  = 121;
+  var RATIO  = 1920 / 1080;
+  var DIR    = '/blog/frames/';
+  var name   = function(n) { return 'frame_' + String(n).padStart(4,'0') + '.webp'; };
+  var TEXT_IN  = 0.04;
+  var TEXT_OUT = 0.88;
+
+  var section = document.getElementById('hero-scroll');
+  var sticky  = document.getElementById('hero-sticky');
+  var canvas  = document.getElementById('hero-canvas');
+  var ctx     = canvas.getContext('2d');
+  var overlay = document.getElementById('hero-text');
+  var hint    = document.getElementById('hero-hint');
+  var loader  = document.getElementById('hero-loader');
+  var lf      = document.getElementById('hl-fill');
+  var ln      = document.getElementById('hl-num');
+  var DPR     = window.devicePixelRatio || 1;
+  var frames  = [];
+  var cur = 0, pend = false, nxt = 0, loaded = 0;
+
+  function resize() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var w, h;
+    if (vw / vh > RATIO) { h = vh; w = vh * RATIO; }
+    else { w = vw; h = vw / RATIO; }
+    canvas.style.width  = w + 'px';
+    canvas.style.height = h + 'px';
+    canvas.width  = Math.round(w * DPR);
+    canvas.height = Math.round(h * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    if (frames[cur]) draw(cur);
+  }
+  window.addEventListener('resize', resize);
+
+  function draw(i) {
+    var img = frames[i]; if (!img) return;
+    var w = parseFloat(canvas.style.width), h = parseFloat(canvas.style.height);
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+  }
+
+  function schedule(i) {
+    nxt = i;
+    if (pend) return;
+    pend = true;
+    requestAnimationFrame(function() {
+      pend = false;
+      if (nxt !== cur) { cur = nxt; draw(cur); }
+    });
+  }
+
+  function onScroll() {
+    var scrolled = window.scrollY - section.offsetTop;
+    var total    = section.offsetHeight - window.innerHeight;
+    var progress = Math.max(0, Math.min(1, scrolled / total));
+    var idx      = Math.min(TOTAL - 1, Math.floor(progress * TOTAL));
+    schedule(idx);
+    overlay.classList.toggle('visible', progress > TEXT_IN && progress < TEXT_OUT);
+    hint.classList.toggle('gone', scrolled > 80);
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+
+  function preload() {
+    for (var i = 0; i < TOTAL; i++) {
+      (function(idx) {
+        var img = new Image();
+        img.onload = img.onerror = function() {
+          frames[idx] = img.naturalWidth ? img : null;
+          var p = Math.round(++loaded / TOTAL * 100);
+          lf.style.width = p + '%';
+          ln.textContent = p + '%';
+          if (loaded === TOTAL) {
+            loader.classList.add('hidden');
+            setTimeout(function() { loader.style.display = 'none'; }, 900);
+            draw(0);
+            onScroll();
+          }
+        };
+        img.src = DIR + name(idx + 1);
+      })(i);
+    }
+  }
+
+  resize();
+  preload();
+})();
+</script>`;
+
+// ─── indexTemplate con hero integrado ─────────────────────────────────────
+
 function indexTemplate(posts) {
   const cards = posts.map(p => `
     <article class="post-card reveal" data-category="${p.categoria}">
@@ -344,14 +503,39 @@ function indexTemplate(posts) {
   const filtros = categorias.map(c => `<button class="filter-btn" data-filter="${c}">${c}</button>`).join("");
 
   const content = `
-  <main class="blog-main">
-    <header class="blog-header reveal">
-      <div class="blog-header-inner">
-        <p class="blog-overline">Conocimiento BIM</p>
-        <h1 class="blog-title">El Blog de<br/><em>BIMARG</em></h1>
-        <p class="blog-subtitle">Metodología, tecnología y casos reales<br/>del primer estudio BIM de la Patagonia.</p>
+
+  <!-- ══ HERO SCROLL-DRIVEN ══════════════════════════════════════ -->
+  <section id="hero-scroll">
+    <div id="hero-sticky">
+
+      <!-- Loader -->
+      <div id="hero-loader">
+        <div class="hl-logo">BIMARG</div>
+        <div class="hl-track"><div class="hl-fill" id="hl-fill"></div></div>
+        <div class="hl-num" id="hl-num">0%</div>
       </div>
-    </header>
+
+      <!-- Canvas del video -->
+      <canvas id="hero-canvas"></canvas>
+
+      <!-- Texto overlay izquierda -->
+      <div id="hero-text">
+        <div class="ht-label">Conocimiento BIM — Patagonia</div>
+        <h1 class="ht-title">El Blog de<br/><em>BIMARG</em></h1>
+        <p class="ht-sub">Metodología, tecnología y casos reales del primer estudio BIM de la Patagonia.</p>
+      </div>
+
+      <!-- Scroll hint -->
+      <div id="hero-hint">
+        <div class="hh-txt">Scroll</div>
+        <div class="hh-line"></div>
+      </div>
+
+    </div>
+  </section>
+  <!-- ══════════════════════════════════════════════════════════════ -->
+
+  <main class="blog-main">
     <section class="blog-content">
       <div class="blog-filters">
         <button class="filter-btn active" data-filter="all">Todos</button>
@@ -369,6 +553,8 @@ function indexTemplate(posts) {
     description: "Artículos sobre BIM, Lean Construction, RIBA y tecnología aplicada a la construcción. Por BIMARG, el primer estudio BIM especializado de la Patagonia.",
     canonical: "/blog",
     content,
+    // Inyectamos los estilos y script del hero en el <head> / antes del </body>
+    extraHead: heroStyles + heroScript,
   });
 }
 
@@ -452,8 +638,21 @@ async function build() {
   ensureDir(DIST);
   ensureDir(BLOG_DIST);
 
+  // Copiar assets (style.css, main.js)
   if (fs.existsSync(ASSETS)) {
     fs.cpSync(ASSETS, path.join(BLOG_DIST), { recursive: true });
+  }
+
+  // Copiar frames del hero scroll
+  const framesSource = path.join(__dirname, "assets", "frames");
+  const framesDest   = path.join(BLOG_DIST, "frames");
+  if (fs.existsSync(framesSource)) {
+    console.log("🎞️  Copiando frames del hero...");
+    fs.cpSync(framesSource, framesDest, { recursive: true });
+    console.log(`   ✓ Frames copiados a /dist/blog/frames/\n`);
+  } else {
+    console.warn("⚠️  No se encontró assets/frames/ — el hero no va a cargar imágenes.");
+    console.warn("   Copiá la carpeta frames/ dentro de assets/frames/\n");
   }
 
   console.log("📥 Leyendo posts desde Notion...");
