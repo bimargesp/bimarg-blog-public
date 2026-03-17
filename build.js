@@ -412,10 +412,14 @@ document.addEventListener('DOMContentLoaded', function() {
   function resize() {
     var vw = window.innerWidth, vh = window.innerHeight;
     var w, h;
-    if (vw / vh > RATIO) { h = vh; w = vh * RATIO; }
-    else { w = vw; h = vw / RATIO; }
-    canvas.style.width  = w + 'px';
-    canvas.style.height = h + 'px';
+    // cover: llena toda la pantalla, recorta si es necesario
+    if (vw / vh > RATIO) { w = vw; h = vw / RATIO; }
+    else { h = vh; w = vh * RATIO; }
+    canvas.style.width    = w + 'px';
+    canvas.style.height   = h + 'px';
+    canvas.style.position = 'absolute';
+    canvas.style.left     = Math.round((vw - w) / 2) + 'px';
+    canvas.style.top      = Math.round((vh - h) / 2) + 'px';
     canvas.width  = Math.round(w * DPR);
     canvas.height = Math.round(h * DPR);
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
