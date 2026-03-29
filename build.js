@@ -91,7 +91,7 @@ function richTextToHtml(richTexts) {
   }).join("");
 }
 
-function blockToHtml(block) {
+async function blockToHtml(block) {
   const type = block.type;
   const data = block[type];
 
@@ -134,11 +134,15 @@ function blockToHtml(block) {
     case "divider":
       return "<hr>";
 
-    case "image":
+    case "image": {
       const imgUrl = data.type === "external" ? data.external?.url : data.file?.url;
       const caption = data.caption?.length ? richTextToHtml(data.caption) : "";
       if (!imgUrl) return "";
-      return `<figure><img src="${imgUrl}" alt="${caption}" loading="lazy">${caption ? `<figcaption>${caption}</figcaption>` : ""}</figure>`;
+      // Descargar la imagen durante el build para evitar URLs expiradas de Notion
+      const localPath = await downloadImage(imgUrl, `content-${block.id}`);
+      const finalSrc = localPath || imgUrl;
+      return `<figure class="post-figure"><img src="${finalSrc}" alt="${caption}" loading="lazy">${caption ? `<figcaption>${caption}</figcaption>` : ""}</figure>`;
+    }
 
     case "video":
       const videoUrl = data.type === "external" ? data.external?.url : data.file?.url;
@@ -189,7 +193,7 @@ async function fetchAllBlocks(blockId) {
   return blocks;
 }
 
-function renderBlocks(blocks) {
+async function renderBlocks(blocks) {
   let html = "";
   let inBulletList = false;
   let inNumberedList = false;
@@ -204,10 +208,10 @@ function renderBlocks(blocks) {
     if (isBullet && !inBulletList) { html += "<ul>"; inBulletList = true; }
     if (isNumbered && !inNumberedList) { html += "<ol>"; inNumberedList = true; }
 
-    html += blockToHtml(block);
+    html += await blockToHtml(block);
 
     if (block._children && block._children.length > 0) {
-      html += renderBlocks(block._children);
+      html += await renderBlocks(block._children);
     }
   }
 
