@@ -19,12 +19,30 @@ const DIST = path.join(__dirname, "dist");
 const ASSETS = path.join(__dirname, "assets");
 const BLOG_DIST = path.join(DIST, "blog");
 
-const notion = new Client({ auth: process.env.NOTION_API_KEY });
+const notion = new Client({ 
+  auth: process.env.NOTION_API_KEY,
+  timeoutMs: 300000 // 5 minutos en lugar de 1 minuto (por defecto)
+});
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+async function retryWithExponentialBackoff(fn, maxRetries = 3, delay = 1000) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (attempt === maxRetries) {
+        throw error;
+      }
+      const waitTime = delay * Math.pow(2, attempt - 1);
+      console.log(`   ⚠️  Intento ${attempt} falló. Reintentando en ${waitTime}ms...`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+  }
 }
 
 function writeFile(filepath, content) {
@@ -231,10 +249,12 @@ async function fetchPosts() {
   const dbId = process.env.NOTION_DATABASE_ID;
   if (!dbId) throw new Error("NOTION_DATABASE_ID no está definida");
 
-  const response = await notion.databases.query({
-    database_id: dbId,
-    filter: { property: "Estado", select: { equals: "Publicado" } },
-    sorts: [{ property: "Fecha de Publicación", direction: "descending" }],
+  const response = await retryWithExponentialBackoff(async () => {
+    return await notion.databases.query({
+      database_id: dbId,
+      filter: { property: "Estado", select: { equals: "Publicado" } },
+      sorts: [{ property: "Fecha de Publicación", direction: "descending" }],
+    });
   });
 
   const posts = [];
