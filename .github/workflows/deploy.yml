@@ -31,13 +31,19 @@ jobs:
         run: npm run build
 
       - name: Deploy a DreamHost vía SFTP
-        uses: wlixcc/SFTP-Deploy-Action@v1.2.4
-        with:
-          server: ${{ secrets.FTP_HOST }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          port: 22
-          local_path: ./dist/blog/*
-          remote_path: ${{ secrets.FTP_SERVER_DIR }}
-          sftp_only: true
-          delete_remote_files: false
+        env:
+          SFTP_HOST: ${{ secrets.FTP_HOST }}
+          SFTP_USER: ${{ secrets.FTP_USERNAME }}
+          SFTP_PASS: ${{ secrets.FTP_PASSWORD }}
+          SFTP_DIR: ${{ secrets.FTP_SERVER_DIR }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq lftp > /dev/null 2>&1
+          lftp -e "
+            set sftp:auto-confirm yes;
+            set net:timeout 30;
+            set net:max-retries 3;
+            open -u $SFTP_USER,$SFTP_PASS sftp://$SFTP_HOST;
+            mirror --reverse --verbose --only-newer ./dist/blog/ $SFTP_DIR;
+            bye
+          "
+          echo "Deploy Success"
