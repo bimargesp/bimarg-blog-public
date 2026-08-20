@@ -63,30 +63,84 @@ function slugify(text) {
     .replace(/[^a-z0-9\s-]/g, "").trim().replace(/\s+/g, "-");
 }
 
+// Tope duro por imagen. Si una descarga no termina en este tiempo,
+// se aborta y sigue el build. Sin esto la Promise puede no resolver nunca
+// y el job corre hasta el timeout de 6h de GitHub (incidente 17-19 ago 2026).
+const IMG_TIMEOUT_MS = 15000;
+const IMG_MAX_REDIRECTS = 3;
+
 async function downloadImage(url, filename) {
+  if (!url || !url.startsWith("http")) return null;
+
+  const imgDir = path.join(BLOG_DIST, "images");
+  ensureDir(imgDir);
+  const ext = url.includes(".png") ? ".png" : ".jpg";
+  const name = filename + ext;
+  const dest = path.join(imgDir, name);
+  const publicPath = `/blog/images/${name}`;
+
+  if (fs.existsSync(dest)) return publicPath;
+
   return new Promise((resolve) => {
-    if (!url || !url.startsWith("http")) { resolve(null); return; }
-    const imgDir = path.join(BLOG_DIST, "images");
-    ensureDir(imgDir);
-    const ext = url.includes(".png") ? ".png" : ".jpg";
-    const name = filename + ext;
-    const dest = path.join(imgDir, name);
-    if (fs.existsSync(dest)) { resolve(`/blog/images/${name}`); return; }
-    const file = fs.createWriteStream(dest);
-    https.get(url, (response) => {
-      if (response.statusCode === 302 || response.statusCode === 301) {
-        file.close();
-        fs.unlink(dest, () => {});
-        https.get(response.headers.location, (r2) => {
-          const f2 = fs.createWriteStream(dest);
-          r2.pipe(f2);
-          f2.on("finish", () => { f2.close(); resolve(`/blog/images/${name}`); });
-        }).on("error", () => resolve(null));
-        return;
-      }
-      response.pipe(file);
-      file.on("finish", () => { file.close(); resolve(`/blog/images/${name}`); });
-    }).on("error", () => { fs.unlink(dest, () => {}); resolve(null); });
+    let settled = false;
+    let req = null;
+    let file = null;
+
+    const cleanup = () => {
+      if (req) { try { req.destroy(); } catch (e) {} }
+      if (file) { try { file.destroy(); } catch (e) {} }
+    };
+
+    const fail = (reason) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fs.unlink(dest, () => {});
+      console.warn(`  [img] ${name}: ${reason}`);
+      resolve(null);
+    };
+
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(publicPath);
+    };
+
+    // Red de seguridad global: pase lo que pase, esto resuelve.
+    const timer = setTimeout(() => fail(`timeout ${IMG_TIMEOUT_MS}ms`), IMG_TIMEOUT_MS);
+
+    const get = (targetUrl, redirectsLeft) => {
+      if (redirectsLeft < 0) { clearTimeout(timer); fail("demasiados redirects"); return; }
+
+      req = https.get(targetUrl, { timeout: IMG_TIMEOUT_MS }, (res) => {
+        const status = res.statusCode;
+
+        if (status >= 300 && status < 400 && res.headers.location) {
+          res.resume();
+          get(res.headers.location, redirectsLeft - 1);
+          return;
+        }
+
+        if (status !== 200) {
+          res.resume();
+          clearTimeout(timer);
+          fail(`HTTP ${status}`);
+          return;
+        }
+
+        file = fs.createWriteStream(dest);
+        file.on("error", () => { clearTimeout(timer); fail("error de escritura"); });
+        res.on("error", () => { clearTimeout(timer); fail("error de stream"); });
+        file.on("finish", () => { file.close(); done(); });
+        res.pipe(file);
+      });
+
+      req.on("timeout", () => { clearTimeout(timer); fail("socket timeout"); });
+      req.on("error", (e) => { clearTimeout(timer); fail(e.message); });
+    };
+
+    get(url, IMG_MAX_REDIRECTS);
   });
 }
 

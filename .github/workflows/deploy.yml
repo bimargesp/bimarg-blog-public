@@ -4,13 +4,26 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "0 * * * *"
+    # Antes: "0 * * * *" (cada hora, 720 corridas/mes, 36% del cupo gratis).
+    # Ahora: 09:00 y 18:00 ART = 12:00 y 21:00 UTC. 60 corridas/mes.
+    # Para publicar al instante: Actions > Deploy Blog BIMARG > Run workflow.
+    - cron: "0 12,21 * * *"
   workflow_dispatch:
+
+# Si una corrida queda colgada, la siguiente la cancela en vez de apilarse.
+# Esto solo ya habria evitado el consumo del 17 al 19 de agosto.
+concurrency:
+  group: deploy-blog
+  cancel-in-progress: true
 
 jobs:
   build-and-deploy:
     name: Build desde Notion + Deploy FTP
     runs-on: ubuntu-latest
+
+    # Tope duro. El default de GitHub es 360 min (6 horas).
+    # Un build normal tarda ~1 min. Si pasa de 10, algo esta roto.
+    timeout-minutes: 10
 
     steps:
       - name: Checkout del repo
@@ -25,25 +38,38 @@ jobs:
         run: npm install
 
       - name: Build desde Notion
+        timeout-minutes: 5
         env:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
         run: npm run build
 
-      - name: Deploy a DreamHost vía SFTP
+      - name: Verificar que el build genero algo
+        run: |
+          if [ ! -f ./dist/blog/index.html ]; then
+            echo "ERROR: no se genero dist/blog/index.html. Abortando deploy."
+            exit 1
+          fi
+          echo "Archivos generados:"
+          find ./dist/blog -type f | wc -l
+
+      - name: Deploy a DreamHost via SFTP
+        timeout-minutes: 4
         env:
           SFTP_HOST: ${{ secrets.FTP_HOST }}
           SFTP_USER: ${{ secrets.FTP_USERNAME }}
           SFTP_PASS: ${{ secrets.FTP_PASSWORD }}
           SFTP_DIR: ${{ secrets.FTP_SERVER_DIR }}
         run: |
+          set -euo pipefail
           sudo apt-get update -qq && sudo apt-get install -y -qq lftp > /dev/null 2>&1
           lftp -e "
             set sftp:auto-confirm yes;
-            set net:timeout 30;
-            set net:max-retries 3;
+            set net:timeout 20;
+            set net:max-retries 2;
+            set net:reconnect-interval-base 5;
             open -u $SFTP_USER,$SFTP_PASS sftp://$SFTP_HOST;
             mirror --reverse --verbose --only-newer ./dist/blog/ $SFTP_DIR;
             bye
           "
-          echo "Deploy Success"
+          echo "Deploy OK"
