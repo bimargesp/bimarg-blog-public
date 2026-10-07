@@ -1,5 +1,8 @@
 /**
- * BIMARG Blog — Build Script v3
+ * BIMARG Blog — Build Script v4 (07/10/2026)
+ *  v4: site.js (cookies + GA4) en todas las páginas, dominio canónico www,
+ *      og:image por defecto, escape de comillas, portadas .webp/.jpeg,
+ *      paginación de Notion y sitemap del blog (/blog/sitemap.xml).
  * Lee posts de Notion y genera HTML estático en /dist
  * Incluye hero scroll-driven (frame animation) en el index del blog
  *
@@ -18,6 +21,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(__dirname, "dist");
 const ASSETS = path.join(__dirname, "assets");
 const BLOG_DIST = path.join(DIST, "blog");
+
+// Dominio canónico: el mismo que usa la home y el sitemap (con www).
+const SITE = "https://www.bimarg.com";
+// Script central de BIMARG: aviso de cookies + GA4 (G-E2XQXCV0JM) + eventos de contacto.
+// NO SACAR: sin esto el blog deja de medir en Analytics.
+const SITE_JS = `<script src="${SITE}/site.js" defer></script>`;
+const DEFAULT_OG = `${SITE}/blog/images/por-que-bim-no-se-compara-con-autocad-cover.png`;
+
+function esc(s) {
+  return String(s || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 const notion = new Client({ 
   auth: process.env.NOTION_API_KEY,
@@ -74,7 +88,8 @@ async function downloadImage(url, filename) {
 
   const imgDir = path.join(BLOG_DIST, "images");
   ensureDir(imgDir);
-  const ext = url.includes(".png") ? ".png" : ".jpg";
+  const extMatch = url.split("?")[0].toLowerCase().match(/\.(png|webp|jpe?g|gif)$/);
+  const ext = extMatch ? (extMatch[1] === "jpeg" ? ".jpg" : "." + extMatch[1]) : ".jpg";
   const name = filename + ext;
   const dest = path.join(imgDir, name);
   const publicPath = `/blog/images/${name}`;
@@ -303,17 +318,26 @@ async function fetchPosts() {
   const dbId = process.env.NOTION_DATABASE_ID;
   if (!dbId) throw new Error("NOTION_DATABASE_ID no está definida");
 
-  const response = await retryWithExponentialBackoff(async () => {
-    return await notion.databases.query({
-      database_id: dbId,
-      filter: { property: "Estado", select: { equals: "Publicado" } },
-      sorts: [{ property: "Fecha de Publicación", direction: "descending" }],
+  // Paginado: la API devuelve como máximo 100 filas por consulta.
+  const results = [];
+  let cursor;
+  do {
+    const response = await retryWithExponentialBackoff(async () => {
+      return await notion.databases.query({
+        database_id: dbId,
+        filter: { property: "Estado", select: { equals: "Publicado" } },
+        sorts: [{ property: "Fecha de Publicación", direction: "descending" }],
+        page_size: 100,
+        ...(cursor ? { start_cursor: cursor } : {}),
+      });
     });
-  });
+    results.push(...response.results);
+    cursor = response.has_more ? response.next_cursor : null;
+  } while (cursor);
 
   const posts = [];
 
-  for (const page of response.results) {
+  for (const page of results) {
     const props = page.properties;
 
     const titulo = props["Título"]?.title?.[0]?.plain_text || "Sin título";
@@ -348,7 +372,9 @@ async function fetchPosts() {
 
 // ─── Templates ────────────────────────────────────────────────────────────
 
-function htmlShell({ title, description, canonical, content, extraHead = "" }) {
+function htmlShell({ title, description, canonical, content, extraHead = "", ogImage = DEFAULT_OG }) {
+  title = esc(title);
+  description = esc(description);
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -356,11 +382,15 @@ function htmlShell({ title, description, canonical, content, extraHead = "" }) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${title} | BIMARG</title>
   <meta name="description" content="${description}" />
-  <link rel="canonical" href="https://bimarg.com${canonical}" />
+  <link rel="canonical" href="${SITE}${canonical}" />
   <meta property="og:title" content="${title} | BIMARG" />
   <meta property="og:description" content="${description}" />
   <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://bimarg.com${canonical}" />
+  <meta property="og:url" content="${SITE}${canonical}" />
+  <meta property="og:image" content="${ogImage}" />
+  <meta property="og:site_name" content="BIMARG" />
+  <meta property="og:locale" content="es_AR" />
+  <meta name="twitter:card" content="summary_large_image" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
@@ -391,6 +421,7 @@ function htmlShell({ title, description, canonical, content, extraHead = "" }) {
     </div>
   </footer>
   <script src="/blog/main.js"></script>
+  ${SITE_JS}
 </body>
 </html>`;
 }
@@ -564,11 +595,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
 function indexTemplate(posts) {
   const cards = posts.map(p => `
-    <article class="post-card reveal" data-category="${p.categoria}">
+    <article class="post-card reveal" data-category="${esc(p.categoria)}">
       <a href="/blog/${p.slug}/" class="post-card-link">
         <div class="post-card-img">
           ${p.imagenLocal
-            ? `<img src="${p.imagenLocal}" alt="${p.titulo}" loading="lazy" />`
+            ? `<img src="${p.imagenLocal}" alt="${esc(p.titulo)}" loading="lazy" />`
             : `<div class="post-card-placeholder"><span>${p.categoria}</span></div>`}
           <span class="post-card-cat">${p.categoria}</span>
         </div>
@@ -584,7 +615,7 @@ function indexTemplate(posts) {
     </article>`).join("");
 
   const categorias = [...new Set(posts.map(p => p.categoria))];
-  const filtros = categorias.map(c => `<button class="filter-btn" data-filter="${c}">${c}</button>`).join("");
+  const filtros = categorias.map(c => `<button class="filter-btn" data-filter="${esc(c)}">${esc(c)}</button>`).join("");
 
   const content = `
 
@@ -635,7 +666,7 @@ function indexTemplate(posts) {
   return htmlShell({
     title: "Blog",
     description: "Artículos sobre BIM, Lean Construction, RIBA y tecnología aplicada a la construcción. Por BIMARG, el primer estudio BIM especializado de la Patagonia.",
-    canonical: "/blog",
+    canonical: "/blog/",
     content,
     // Inyectamos los estilos y script del hero en el <head> / antes del </body>
     extraHead: heroStyles + heroScript,
@@ -651,7 +682,7 @@ function relatedPostsHtml(currentPost, allPosts) {
     <a href="/blog/${p.slug}/" class="related-card">
       <div class="related-card-img">
         ${p.imagenLocal
-          ? `<img src="${p.imagenLocal}" alt="${p.titulo}" loading="lazy">`
+          ? `<img src="${p.imagenLocal}" alt="${esc(p.titulo)}" loading="lazy">`
           : `<div class="related-card-placeholder"><span>${p.categoria}</span></div>`}
       </div>
       <div class="related-card-body">
@@ -689,7 +720,7 @@ function postTemplate(post, allPosts) {
           </div>
         </div>
       </header>
-      ${post.imagenLocal ? `<div class="post-cover reveal"><img src="${post.imagenLocal}" alt="${post.titulo}" /></div>` : ""}
+      ${post.imagenLocal ? `<div class="post-cover reveal"><img src="${post.imagenLocal}" alt="${esc(post.titulo)}" /></div>` : ""}
       <div class="post-body reveal">
         ${post.bodyHtml}
       </div>
@@ -709,7 +740,7 @@ function postTemplate(post, allPosts) {
     description: post.descripcion,
     canonical: `/blog/${post.slug}/`,
     content,
-    extraHead: post.imagenLocal ? `<meta property="og:image" content="https://bimarg.com${post.imagenLocal}" />` : "",
+    ogImage: post.imagenLocal ? `${SITE}${post.imagenLocal}` : DEFAULT_OG,
   });
 }
 
@@ -750,6 +781,12 @@ async function build() {
     const postDir = path.join(BLOG_DIST, post.slug);
     writeFile(path.join(postDir, "index.html"), postTemplate(post, posts));
   }
+
+  // Sitemap del blog: se regenera solo con los posts publicados.
+  const today = new Date().toISOString().slice(0, 10);
+  const urls = [`  <url><loc>${SITE}/blog/</loc><lastmod>${today}</lastmod></url>`]
+    .concat(posts.map(p => `  <url><loc>${SITE}/blog/${p.slug}/</loc><lastmod>${(p.fechaRaw || today).slice(0, 10)}</lastmod></url>`));
+  writeFile(path.join(BLOG_DIST, "sitemap.xml"), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join("\n")}\n</urlset>\n`);
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`\n✅ Build completado en ${elapsed}s`);
