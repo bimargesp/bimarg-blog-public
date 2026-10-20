@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   build-and-deploy:
-    name: Build desde Notion + Deploy FTP
+    name: Build desde Notion + Deploy Cloudflare Pages
     runs-on: ubuntu-latest
 
     # Tope duro. El default de GitHub es 360 min (6 horas).
@@ -53,23 +53,18 @@ jobs:
           echo "Archivos generados:"
           find ./dist/blog -type f | wc -l
 
-      - name: Deploy a DreamHost via SFTP
+      - name: Pagina 404 (para que el router de /blog caiga a la copia historica si falta un post)
+        run: |
+          [ -f ./dist/404.html ] || printf '<!doctype html><meta charset="utf-8"><title>404</title><h1>404</h1>' > ./dist/404.html
+
+      # Antes: SFTP a DreamHost (dado de baja el 19/10/2026).
+      # Ahora: Cloudflare Pages, proyecto "bimarg-blog". El Worker "bimarg-blog-router"
+      # sirve www.bimarg.com/blog/* desde este proyecto.
+      - name: Deploy a Cloudflare Pages
         timeout-minutes: 4
         env:
-          SFTP_HOST: ${{ secrets.FTP_HOST }}
-          SFTP_USER: ${{ secrets.FTP_USERNAME }}
-          SFTP_PASS: ${{ secrets.FTP_PASSWORD }}
-          SFTP_DIR: ${{ secrets.FTP_SERVER_DIR }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 2eef9135dd2520b16ec2401146bfc6cc
         run: |
-          set -euo pipefail
-          sudo apt-get update -qq && sudo apt-get install -y -qq lftp > /dev/null 2>&1
-          lftp -e "
-            set sftp:auto-confirm yes;
-            set net:timeout 20;
-            set net:max-retries 2;
-            set net:reconnect-interval-base 5;
-            open -u $SFTP_USER,$SFTP_PASS sftp://$SFTP_HOST;
-            mirror --reverse --verbose --only-newer ./dist/blog/ $SFTP_DIR;
-            bye
-          "
+          npx --yes wrangler@4 pages deploy ./dist --project-name bimarg-blog --branch main --commit-dirty=true
           echo "Deploy OK"
