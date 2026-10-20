@@ -2,9 +2,11 @@
 
 Blog estático generado automáticamente desde Notion.
 
-**Stack:** Node.js + Notion API + GitHub Actions + DreamHost (FTP)
+**Stack:** Node.js + Notion API + GitHub Actions + Cloudflare Pages (proyecto `bimarg-blog`)
 
-Cada vez que publicás un post en Notion (Estado = Publicado), GitHub Actions genera el HTML y lo sube a `bimarg.com/blog` en ~2 minutos.
+> Desde el 19/10/2026 el blog se publica en Cloudflare Pages (DreamHost dado de baja). El Worker `bimarg-blog-router` sirve `www.bimarg.com/blog/*` desde el proyecto `bimarg-blog` y, si un post viejo no existe ahi, usa la copia historica del repo `bimarg-web`. Los secrets FTP_* ya no se usan; el deploy usa `CLOUDFLARE_API_TOKEN`.
+
+Cada vez que publicás un post en Notion (Estado = Publicado), GitHub Actions genera el HTML y lo publica en `bimarg.com/blog` en ~2 minutos.
 
 ---
 
